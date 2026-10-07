@@ -1,3 +1,10 @@
 streamlit>=1.40
 pillow>=10.0
 pandas>=2.0
+numpy
+opencv-python-headless
+scipy
+scikit-image
+scikit-learn
+torch
+torchvision
