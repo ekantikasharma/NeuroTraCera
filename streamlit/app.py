@@ -29,6 +29,77 @@ from model import ModelEngine, CLASSES
 
 API_URL = os.getenv("NEUROTRACERA_API_URL", os.getenv("CEREVIX_API_URL", "http://127.0.0.1:8000"))
 
+@st.cache_resource
+def start_embedded_backend() -> bool:
+    """
+    Spins up the FastAPI backend in a background daemon thread if not already running.
+    Allows Streamlit Community Cloud and single-command deployments to run seamlessly.
+    """
+    import socket
+    import threading
+    import time
+
+    def _is_server_listening(host="127.0.0.1", port=8000) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex((host, port)) == 0
+
+    if not _is_server_listening("127.0.0.1", 8000):
+        try:
+            import uvicorn
+            from server import app as fastapi_app
+
+            def _run():
+                config = uvicorn.Config(
+                    app=fastapi_app,
+                    host="127.0.0.1",
+                    port=8000,
+                    log_level="warning",
+                    access_log=False
+                )
+                server = uvicorn.Server(config)
+                server.run()
+
+            t = threading.Thread(target=_run, daemon=True, name="NeuroTraCera-FastAPI-Server")
+            t.start()
+
+            for _ in range(40):
+                time.sleep(0.5)
+                if _is_server_listening("127.0.0.1", 8000):
+                    try:
+                        r = requests.get(f"{API_URL}/api/health", timeout=1)
+                        if r.status_code == 200:
+                            return True
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[NeuroTraCera] Embedded backend server startup notice: {e}")
+            return False
+
+    return True
+
+# Auto-start backend if using local API address
+if "127.0.0.1" in API_URL or "localhost" in API_URL:
+    start_embedded_backend()
+
+def api_request(method: str, path: str, **kwargs) -> requests.Response:
+    """
+    Robust API request wrapper with auto-retry and embedded backend healing.
+    """
+    url = f"{API_URL}{path}" if path.startswith("/") else f"{API_URL}/{path}"
+    timeout = kwargs.pop("timeout", 15)
+    last_exc = None
+    for attempt in range(3):
+        try:
+            return requests.request(method, url, timeout=timeout, **kwargs)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            if attempt < 2 and ("127.0.0.1" in API_URL or "localhost" in API_URL):
+                start_embedded_backend()
+                time.sleep(1.0)
+            else:
+                raise last_exc
+
 CLASSES = [
     "Glioma",
     "Meningioma",
@@ -104,8 +175,9 @@ def run_xai_method(method_name: str, res: dict) -> dict:
 
     # 1. Try Backend API
     try:
-        resp = requests.post(
-            f"{API_URL}/api/xai/run",
+        resp = api_request(
+            "POST",
+            "/api/xai/run",
             json=payload,
             headers=get_auth_headers(),
             timeout=300,
@@ -216,8 +288,9 @@ def request_mri_report(
 
     # 1. Try Backend API
     try:
-        resp = requests.post(
-            f"{API_URL}/api/generate-mri-report",
+        resp = api_request(
+            "POST",
+            "/api/generate-mri-report",
             json=payload,
             headers=get_auth_headers(),
             timeout=180,
@@ -252,8 +325,9 @@ def request_report_pdf(report_dict: dict) -> Optional[bytes]:
 
     # 1. Try Backend API
     try:
-        resp = requests.post(
-            f"{API_URL}/api/generate-mri-report/pdf",
+        resp = api_request(
+            "POST",
+            "/api/generate-mri-report/pdf",
             json={"report": report_dict},
             headers=get_auth_headers(),
             timeout=120,
@@ -1672,14 +1746,25 @@ def check_api_health() -> Optional[Dict[str, Any]]:
         resp = requests.get(f"{API_URL}/api/health", timeout=3)
         if resp.status_code == 200:
             return resp.json()
-        return None
     except Exception:
-        return None
+        pass
+
+    # If backend is running on localhost and not answering, trigger embedded startup
+    if "127.0.0.1" in API_URL or "localhost" in API_URL:
+        start_embedded_backend()
+        try:
+            resp = requests.get(f"{API_URL}/api/health", timeout=1)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return None
 
 def fetch_patient_history() -> List[Dict[str, Any]]:
     try:
-        resp = requests.get(
-            f"{API_URL}/api/analyses",
+        resp = api_request(
+            "GET",
+            "/api/analyses",
             headers=get_auth_headers(),
             timeout=8,
         )
@@ -1697,8 +1782,9 @@ def delete_patient_analysis(analysis_id: Any) -> bool:
         return False
     success = False
     try:
-        resp = requests.delete(
-            f"{API_URL}/api/analyses/{analysis_id}",
+        resp = api_request(
+            "DELETE",
+            f"/api/analyses/{analysis_id}",
             headers=get_auth_headers(),
             timeout=8,
         )
@@ -1720,8 +1806,9 @@ def clear_all_patient_history() -> bool:
     """Clears all analysis history for the current account."""
     success = False
     try:
-        resp = requests.delete(
-            f"{API_URL}/api/analyses",
+        resp = api_request(
+            "DELETE",
+            "/api/analyses",
             headers=get_auth_headers(),
             timeout=8,
         )
@@ -1754,8 +1841,9 @@ def perform_logout() -> None:
     token = st.session_state.get("session_token")
     if token:
         try:
-            requests.post(
-                f"{API_URL}/api/logout",
+            api_request(
+                "POST",
+                "/api/logout",
                 headers={"X-Session-Token": token},
                 timeout=3,
             )
@@ -2087,8 +2175,9 @@ if not st.session_state.logged_in:
                 target_page = "Detection" if is_analysis_flow else "Dashboard"
                 try:
                     with st.spinner("Authorizing with Google Healthcare ID..."):
-                        resp = requests.post(
-                            f"{API_URL}/api/auth/google",
+                        resp = api_request(
+                            "POST",
+                            "/api/auth/google",
                             json={
                                 "email": "neuro.specialist@gmail.com",
                                 "name": "Dr. Neuro Specialist",
@@ -2148,8 +2237,9 @@ if not st.session_state.logged_in:
                     target_page = "Detection" if (btn_analysis or is_analysis_flow) else "Dashboard"
                     try:
                         with st.spinner("Verifying credentials with NeuroTraCera backend..."):
-                            resp = requests.post(
-                                f"{API_URL}/api/login",
+                            resp = api_request(
+                                "POST",
+                                "/api/login",
                                 json={"username": login_user.strip(), "password": login_pwd},
                                 timeout=8,
                             )
@@ -2219,8 +2309,9 @@ if not st.session_state.logged_in:
                 else:
                     try:
                         with st.spinner("Registering account on NeuroTraCera..."):
-                            resp = requests.post(
-                                f"{API_URL}/api/register",
+                            resp = api_request(
+                                "POST",
+                                "/api/register",
                                 json={
                                     "username": reg_user.strip(),
                                     "password": reg_pwd,
@@ -2661,8 +2752,9 @@ elif st.session_state.page in ["Detection", "Workspace"]:
                 }
 
                 with st.spinner("Processing MRI: Evaluating ResNet-50 weights, computing Grad-CAM gradients, and sampling Monte Carlo dropout passes..."):
-                    resp = requests.post(
-                        f"{API_URL}/api/analyze/upload",
+                    resp = api_request(
+                        "POST",
+                        "/api/analyze/upload",
                         files=files_payload,
                         headers=get_auth_headers(),
                         timeout=300,
@@ -4490,8 +4582,9 @@ elif st.session_state.page in ["Prediction", "Result", "Analysis"]:
 
                             # Sync update to backend
                             try:
-                                requests.put(
-                                    f"{API_URL}/api/reports/{rep.get('id')}",
+                                api_request(
+                                    "PUT",
+                                    f"/api/reports/{rep.get('id')}",
                                     json={
                                         "findings": new_findings,
                                         "impression": new_impression,

@@ -79,6 +79,19 @@ class ModelEngine:
             else "cpu"
         )
 
+        # Normalize model path across varying working directories
+        if not os.path.isabs(model_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            candidate = os.path.join(base_dir, model_path)
+            if os.path.exists(candidate):
+                model_path = candidate
+            else:
+                alt = os.path.join(base_dir, "models", os.path.basename(model_path))
+                if os.path.exists(alt):
+                    model_path = alt
+                else:
+                    model_path = candidate
+
         self.model_path = model_path
 
         self.model = None
@@ -116,10 +129,46 @@ class ModelEngine:
 
 
     # ========================================================
+    # DOWNLOAD WEIGHTS FALLBACK (E.G. GIT LFS POINTER RECOVERY)
+    # ========================================================
+
+    def _download_model_weights(self):
+        url = "https://media.githubusercontent.com/media/ekantikasharma/NeuroTraCera/main/models/brain_tumor_model.pth"
+        try:
+            import requests
+            print(f"[ModelEngine] Downloading model checkpoint from {url}...")
+            os.makedirs(os.path.dirname(os.path.abspath(self.model_path)), exist_ok=True)
+            with requests.get(url, stream=True, timeout=180) as r:
+                r.raise_for_status()
+                with open(self.model_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            print(f"[ModelEngine] Downloaded binary checkpoint ({os.path.getsize(self.model_path)} bytes).")
+        except Exception as e:
+            print(f"[ModelEngine] Warning: Automatic model download encountered: {e}")
+
+
+    # ========================================================
     # LOAD MODEL
     # ========================================================
 
     def load_model(self):
+
+        # Check if model exists or is an unresolved Git LFS pointer
+        is_lfs_pointer = False
+        if os.path.exists(self.model_path) and os.path.getsize(self.model_path) < 2000:
+            try:
+                with open(self.model_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read(150)
+                    if "version https://git-lfs" in content or "oid sha256:" in content:
+                        is_lfs_pointer = True
+            except Exception:
+                pass
+
+        if not os.path.exists(self.model_path) or is_lfs_pointer:
+            print(f"[ModelEngine] Checkpoint missing or Git LFS text pointer ({self.model_path}). Fetching binary weights...")
+            self._download_model_weights()
 
         if not os.path.exists(
             self.model_path
@@ -135,11 +184,18 @@ class ModelEngine:
             num_classes=len(CLASSES)
         )
 
-        # Load checkpoint
-        checkpoint = torch.load(
-            self.model_path,
-            map_location=self.device
-        )
+        # Load checkpoint (PyTorch 2.6+ weights_only compatibility)
+        try:
+            checkpoint = torch.load(
+                self.model_path,
+                map_location=self.device,
+                weights_only=False
+            )
+        except TypeError:
+            checkpoint = torch.load(
+                self.model_path,
+                map_location=self.device
+            )
 
         # ----------------------------------------------------
         # Support different checkpoint formats

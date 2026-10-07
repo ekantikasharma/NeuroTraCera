@@ -11,6 +11,7 @@ torchvision
 reportlab
 fastapi
 uvicorn[standard]
+python-multipart
 pydantic
 tqdm
 requests
