@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+numpy
+pillow
+opencv-python
+torch
+torchvision
+scikit-learn
+matplotlib
+pymongo
+motor
+python-dotenv
