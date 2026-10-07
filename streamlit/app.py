@@ -817,28 +817,15 @@ html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
     background-color: var(--bg-app) !important;
 }
 
-/* Force crisp, high-contrast dark text on light backgrounds to prevent browser dark-mode wash-out */
-[data-testid="stMain"] p,
-[data-testid="stMain"] strong,
-[data-testid="stMain"] b,
-[data-testid="stMain"] h1,
-[data-testid="stMain"] h2,
-[data-testid="stMain"] h3,
-[data-testid="stMain"] h4,
-[data-testid="stMain"] h5,
-[data-testid="stMain"] h6,
-[data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
-[data-testid="stMain"] [data-testid="stMarkdownContainer"] strong,
-[data-testid="stHtml"] p,
-[data-testid="stHtml"] strong,
-[data-testid="stHtml"] b,
-[data-testid="stHtml"] h1,
-[data-testid="stHtml"] h2,
-[data-testid="stHtml"] h3,
-[data-testid="stHtml"] h4,
-[data-testid="stHtml"] h5,
-[data-testid="stHtml"] h6 {
-    color: #0f172a !important;
+/* Ensure high-contrast dark text in standard markdown blocks on the light application background */
+[data-testid="stMarkdownContainer"] > p,
+[data-testid="stMarkdownContainer"] > h1,
+[data-testid="stMarkdownContainer"] > h2,
+[data-testid="stMarkdownContainer"] > h3,
+[data-testid="stMarkdownContainer"] > h4,
+[data-testid="stMarkdownContainer"] > h5,
+[data-testid="stMarkdownContainer"] > h6 {
+    color: #0f172a;
 }
 
 [data-testid="stHeader"] {
@@ -2356,13 +2343,6 @@ def render_landing_page() -> None:
         background-color: #020617 !important;
     }
     
-    div[data-testid="stElementContainer"]:has(> [data-testid="stHtml"]) {
-        display: none !important;
-        height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    
     iframe,
     [data-testid="stCustomComponentV1"] iframe {
         display: block !important;
@@ -2405,7 +2385,20 @@ def render_landing_page() -> None:
 # ==============================================================================
 
 if not st.session_state.logged_in:
-    # 0. Check for incoming Google OAuth callback (?code=...)
+    # 0. Check for Google OAuth cancellation or error (?error=...)
+    if "error" in st.query_params:
+        g_err = str(st.query_params.get("error", "")).strip()
+        g_desc = str(st.query_params.get("error_description", "")).strip()
+        st.session_state.show_login = True
+        if g_err == "access_denied":
+            st.warning("Google sign-in was cancelled.")
+        else:
+            st.error(f"Google sign-in error: {g_desc or g_err}")
+        for qk in ["error", "error_description", "state", "code"]:
+            if qk in st.query_params:
+                del st.query_params[qk]
+
+    # Check for incoming Google OAuth callback (?code=...)
     if "code" in st.query_params:
         g_code = str(st.query_params.get("code", "")).strip()
         client_id, client_secret = get_google_auth_config()
@@ -2655,84 +2648,27 @@ if not st.session_state.logged_in:
 
             client_id, client_secret = get_google_auth_config()
             target_page = "Detection" if is_analysis_flow else "Dashboard"
+            redirect_uri = get_app_base_url()
 
-            # Check if live Google OAuth Client ID is active (Just like other major websites)
-            if client_id:
-                oauth_params = {
-                    "client_id": client_id,
-                    "redirect_uri": get_app_base_url(),
-                    "response_type": "code",
-                    "scope": "openid email profile",
-                    "access_type": "online",
-                    "prompt": "select_account",
-                    "state": "neurotracera_oauth",
-                }
-                google_oauth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(oauth_params)
-                render_html(f"""
-                <a href="{google_oauth_url}" target="_top" style="text-decoration: none; display: block; width: 100%;">
-                    <div style="background: #ffffff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9999px; font-size: 14px; font-weight: 500; height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 1px 2px 0 rgba(60,64,67,0.08), 0 1px 3px 1px rgba(60,64,67,0.06); cursor: pointer; transition: all .2s;">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" width="18" height="18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
-                        <span>Continue with Google</span>
-                    </div>
-                </a>
-                """)
-            else:
-                btn_google = st.button("Continue with Google", use_container_width=True, key="cx_btn_google")
+            oauth_params = {
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": "openid email profile",
+                "access_type": "online",
+                "prompt": "select_account",
+                "state": "neurotracera_oauth",
+            }
+            google_oauth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(oauth_params)
 
-                if "google_auth_dialog" not in st.session_state:
-                    st.session_state.google_auth_dialog = False
-
-                if btn_google:
-                    st.session_state.google_auth_dialog = not st.session_state.google_auth_dialog
-
-                if st.session_state.google_auth_dialog:
-                    with st.container(border=True):
-                        st.markdown("<strong style='font-size: 14px; color: #0f172a;'>Sign in with Google Account</strong>", unsafe_allow_html=True)
-                        st.caption("Sign in with your Google email address or clinical Google Workspace account.")
-                        google_user_email = st.text_input("Your Google Email", value="neuro.specialist@gmail.com", placeholder="doctor@gmail.com", key="cx_g_email")
-                        google_user_name = st.text_input("Clinician / Specialist Name", value="Dr. Neuro Specialist", placeholder="Dr. Jane Doe", key="cx_g_name")
-
-                        col_g_act1, col_g_act2 = st.columns([1.2, 1])
-                        with col_g_act1:
-                            if st.button("Authorize with Google", type="primary", use_container_width=True, key="cx_btn_do_gauth"):
-                                with st.spinner("Authorizing with Google Healthcare ID..."):
-                                    success, payload = authenticate_google_user(
-                                        email=google_user_email,
-                                        name=google_user_name,
-                                        google_id=f"goog_{secrets.token_hex(4)}"
-                                    )
-                                    if success:
-                                        st.session_state.logged_in = True
-                                        st.session_state.session_token = payload.get("session_token")
-                                        st.session_state.user = payload.get("user", {})
-                                        st.session_state.page = target_page
-                                        st.session_state.show_login = False
-                                        st.session_state.auth_provider = "google"
-                                        if "post_login_target" in st.session_state:
-                                            del st.session_state["post_login_target"]
-                                        for qk in ["auth", "login", "action"]:
-                                            if qk in st.query_params:
-                                                del st.query_params[qk]
-                                        st.success(f"Welcome, {html.escape(google_user_name)}!")
-                                        time.sleep(0.3)
-                                        st.rerun()
-                        with col_g_act2:
-                            if st.button("Close", use_container_width=True, key="cx_btn_cancel_gauth"):
-                                st.session_state.google_auth_dialog = False
-                                st.rerun()
-
-                        with st.expander("ℹ️ How to connect live Google Cloud OAuth credentials"):
-                            st.markdown(
-                                """
-                                To enable automated 1-click Google OAuth redirection like major SaaS sites:
-                                1. Open [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
-                                2. Create an **OAuth 2.0 Client ID** (Web application).
-                                3. Set Authorized Redirect URI to:  
-                                   `https://neurotracera-hmdwseb7aebbhhkwk4gsywf.streamlit.app`
-                                4. Add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Streamlit Cloud Secrets (or `.streamlit/secrets.toml`).
-                                """,
-                                unsafe_allow_html=True
-                            )
+            render_html(f"""
+            <a href="{google_oauth_url}" target="_top" style="text-decoration: none; display: block; width: 100%;">
+                <div style="background: #ffffff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9999px; font-size: 14px; font-weight: 500; height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 1px 2px 0 rgba(60,64,67,0.08), 0 1px 3px 1px rgba(60,64,67,0.06); cursor: pointer; transition: all .2s;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" width="18" height="18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/></svg>
+                    <span>Continue with Google</span>
+                </div>
+            </a>
+            """)
 
             render_html("""
             <div style="display: flex; align-items: center; margin: 18px 0 16px 0; color: #94a3b8; font-size: 11px;">
