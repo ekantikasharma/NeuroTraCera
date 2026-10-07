@@ -9,3 +9,8 @@ scikit-learn
 torch
 torchvision
 reportlab
+fastapi
+uvicorn[standard]
+pydantic
+tqdm
+requests
